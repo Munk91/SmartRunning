@@ -1,0 +1,12 @@
+streamlit==1.31.0
+osmnx==1.8.1
+networkx==3.1
+folium==0.14.0
+streamlit_folium==0.15.0
+matplotlib==3.8.2
+numpy==1.26.3
+pandas==2.1.4
+requests==2.31.0
+gpxpy==1.6.1
+geopandas==0.14.1
+geopy==2.4.1
