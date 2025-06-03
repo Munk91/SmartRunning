@@ -54,9 +54,27 @@ If you encounter issues with dependencies:
 
 - **Route Generator**: Create custom running routes based on desired distance and surface preference
 - **Map Visualization**: Interactive maps showing generated routes
-- **User Authentication**: Login and registration forms (connects to Express backend)
+- **User Authentication**: Login and registration forms connected to Express backend
 - **Activity History**: Track and visualize past running activities
 - **Profile Management**: User profile settings and preferences
+- **GPX Export**: Download routes as GPX files compatible with GPS devices and fitness apps
+
+## Backend Integration
+
+This Streamlit frontend connects to the SmartRunning Express.js backend through RESTful APIs. The following endpoints are used:
+
+- Authentication endpoints:
+  - `POST /api/auth/login`: User login
+  - `POST /api/auth/register`: User registration
+  - `GET /api/auth/profile`: Get user profile
+
+- Activity endpoints:
+  - `POST /api/activity/generate`: Generate a running route
+  - `POST /api/activity`: Save an activity
+  - `GET /api/activity`: Retrieve all activities
+  - `GET /api/activity/:id`: Get a specific activity
+  - `PUT /api/activity/:id`: Update an activity
+  - `DELETE /api/activity/:id`: Delete an activity
 
 ## Setup Instructions
 
@@ -74,14 +92,9 @@ If you encounter issues with dependencies:
 
 - `app.py`: Main Streamlit application
 - `routing.py`: Route generation logic using OSMnx and NetworkX
+- `api.py`: API client for communicating with the backend
 - `requirements.txt`: Python dependencies
-
-## Backend Integration
-
-This Streamlit frontend is designed to work with the Express.js backend. To enable full functionality:
-
-1. Ensure the Express backend is running (default: http://localhost:3000)
-2. Update the API endpoint URLs in the app.py file if needed
+- `.streamlit/config.toml`: Streamlit configuration and theming
 
 ## Technologies
 
@@ -89,3 +102,4 @@ This Streamlit frontend is designed to work with the Express.js backend. To enab
 - **OSMnx & NetworkX**: Route generation based on OpenStreetMap data
 - **Folium**: Interactive map visualization
 - **GPX**: Route export functionality
+- **Requests**: API communication with backend

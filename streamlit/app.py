@@ -9,6 +9,14 @@ st.set_page_config(
 
 import json
 import os
+import datetime
+
+# Import API client
+from api import (
+    login, register, logout, get_profile, update_profile,
+    generate_route as api_generate_route,
+    save_activity, get_activities, get_activity, update_activity, delete_activity
+)
 
 # Check for required packages with graceful fallbacks
 try:
@@ -63,41 +71,49 @@ except ImportError:
 if 'authenticated' not in st.session_state:
     st.session_state.authenticated = False
     st.session_state.user_data = None
+    st.session_state.auth_token = None
 
-# Function to handle login
-def login(email, password):
-    try:
-        # This would be replaced with an actual API call to your Express backend
-        # Example: response = requests.post("http://localhost:3000/api/auth/login", json={"email": email, "password": password})
-        # For now, use mock authentication
-        if email and password:  # Replace with actual validation
-            st.session_state.authenticated = True
-            st.session_state.user_data = {"name": "Demo User", "email": email}
-            return True
-        return False
-    except Exception as e:
-        st.error(f"Login error: {str(e)}")
-        return False
+# API URL configuration
+if 'api_url' not in st.session_state:
+    st.session_state.api_url = "http://localhost:3000/api"
 
-# Function to handle registration
-def register(name, email, password):
-    try:
-        # This would be replaced with an actual API call to your Express backend
-        # Example: response = requests.post("http://localhost:3000/api/auth/register", json={"name": name, "email": email, "password": password})
-        # For now, use mock registration
-        if name and email and password:  # Replace with actual validation
-            st.session_state.authenticated = True
-            st.session_state.user_data = {"name": name, "email": email}
-            return True
-        return False
-    except Exception as e:
-        st.error(f"Registration error: {str(e)}")
+# Initialize session state for current route
+if 'current_route' not in st.session_state:
+    st.session_state.current_route = None
+
+# For storing activity history
+if 'activity_history' not in st.session_state:
+    st.session_state.activity_history = []
+
+# Function to handle login with API
+def handle_login(email, password):
+    success, result = login(email, password)
+    if success:
+        # Successfully logged in
+        st.success("Login successful!")
+        return True
+    else:
+        # Login failed
+        st.error(f"Login failed: {result}")
         return False
 
-# Function to logout
-def logout():
-    st.session_state.authenticated = False
-    st.session_state.user_data = None
+# Function to handle registration with API
+def handle_register(name, email, password):
+    success, result = register(name, email, password)
+    if success:
+        # Successfully registered
+        st.success("Registration successful!")
+        return True
+    else:
+        # Registration failed
+        st.error(f"Registration failed: {result}")
+        return False
+
+# Function to handle logout
+def handle_logout():
+    logout()  # Call the API logout function
+    st.success("Logged out successfully")
+    st.rerun()
 
 # UI Structure
 def main():
@@ -115,11 +131,9 @@ def main():
                     submit = st.form_submit_button("Login")
                     
                     if submit:
-                        if login(email, password):
-                            st.success("Login successful!")
+                        if handle_login(email, password):
+                            # Login successful - handled by the function
                             st.rerun()
-                        else:
-                            st.error("Invalid credentials")
             else:
                 with st.form("register_form"):
                     name = st.text_input("Name")
@@ -131,11 +145,9 @@ def main():
                     if submit:
                         if password != confirm_password:
                             st.error("Passwords do not match")
-                        elif register(name, email, password):
-                            st.success("Registration successful!")
+                        elif handle_register(name, email, password):
+                            # Registration successful - handled by the function
                             st.rerun()
-                        else:
-                            st.error("Registration failed")
         else:
             st.write(f"Welcome, {st.session_state.user_data['name']}!")
             
@@ -143,8 +155,11 @@ def main():
             nav_selection = st.radio("Navigation", ["Route Generator", "Activity History", "Profile"])
             
             # Logout button
+            # Show API connection status
+            st.caption(f"Connected to API at {st.session_state.api_url}")
+            
             if st.button("Logout"):
-                logout()
+                handle_logout()
                 st.rerun()
 
     # Main content
@@ -172,6 +187,13 @@ def main():
                 surface_options = ["Any", "Road", "Trail", "Mixed"]
                 surface = st.selectbox("Surface Preference", surface_options)
                 
+                # Add API URL configuration in the sidebar
+                with st.sidebar.expander("API Configuration"):
+                    api_url = st.text_input("API URL", value=st.session_state.api_url)
+                    if st.button("Update API URL"):
+                        st.session_state.api_url = api_url
+                        st.success("API URL updated")
+                
                 if st.button("Generate Route"):
                     with st.spinner("Generating your route..."):
                         try:
@@ -180,7 +202,22 @@ def main():
                             debug_info = st.empty()
                             debug_info.info(f"Starting route generation from {start_location} for {distance} km on {surface} surface")
                             
-                            route_data = generate_route(start_location, distance, surface)
+                            # Try getting route from API first
+                            if st.session_state.authenticated:
+                                success, api_route_data = api_generate_route(start_location, distance, surface)
+                                if success:
+                                    route_data = api_route_data
+                                    # Store the route in session state for later saving
+                                    st.session_state.current_route = route_data
+                                    debug_info.success("Route generated via API successfully!")
+                                else:
+                                    # If API fails, fall back to local generation
+                                    debug_info.warning(f"API route generation failed: {api_route_data}. Falling back to local generation.")
+                                    route_data = generate_route(start_location, distance, surface)
+                            else:
+                                # Not authenticated, use local generation
+                                debug_info.info("Using local route generation (not logged in)")
+                                route_data = generate_route(start_location, distance, surface)
                             
                             if route_data:
                                 if "error" in route_data:
@@ -257,39 +294,63 @@ def main():
                                 if "elevation_gain" in route_data:
                                     st.metric("Elevation Gain", f"{route_data['elevation_gain']} m")
                                 
+                                # Actions section
+                                st.subheader("Actions")
+                                col1, col2 = st.columns(2)
+                                
+                                # Save route button (only if authenticated)
+                                if st.session_state.authenticated:
+                                    with col1:
+                                        if st.button("Save Route"):
+                                            if st.session_state.current_route:
+                                                with st.spinner("Saving route..."):
+                                                    # Get a name for the route
+                                                    route_name = f"Run on {datetime.datetime.now().strftime('%Y-%m-%d %H:%M')}"
+                                                    
+                                                    # Save the route to the API
+                                                    success, result = save_activity(st.session_state.current_route, route_name)
+                                                    if success:
+                                                        st.success(f"Route saved successfully as '{route_name}'!")
+                                                    else:
+                                                        st.error(f"Failed to save route: {result}")
+                                            else:
+                                                st.warning("No route to save. Generate a route first.")
+                                else:
+                                    with col1:
+                                        st.warning("Log in to save routes")
+                                
                                 # Download option
-                                try:
-                                    if available_packages.get('gpxpy', False):
-                                        # Generate GPX file
-                                        gpx_data = create_gpx(route_data)
-                                        
-                                        # Log success for testing
-                                        st.success("✅ GPX file generated successfully")
-                                        # Add a note about validation
-                                        st.info("GPX validation details are available in server logs")
-                                        
-                                        # Sanitize filename from location
-                                        safe_location = ''.join(c if c.isalnum() else '_' for c in start_location)
-                                        
-                                        st.download_button(
-                                            label="Download GPX",
-                                            data=gpx_data,
-                                            file_name=f"{safe_location}_route.gpx",
-                                            mime="application/gpx+xml",
-                                            help="Download this route as a GPX file to use in your GPS device or other apps"
-                                        )
-                                        
-                                        with st.expander("GPX File Details"):
-                                            st.write("Your GPX file contains:")
-                                            st.write(f"- {len(route_data['coordinates'])} waypoints")
-                                            st.write(f"- Total distance: {route_data.get('distance', 0)} km")
-                                            st.write(f"- Starting coordinates: {route_data.get('start_point', (0,0))}")
-                                    else:
-                                        st.warning("GPX export requires the 'gpxpy' package.")
-                                        st.info("Install with: pip install gpxpy")
-                                except Exception as e:
-                                    st.error(f"Error creating GPX file: {str(e)}")
-                                    st.warning("Could not generate GPX file. Make sure gpxpy is installed.")
+                                with col2:
+                                    try:
+                                        if available_packages.get('gpxpy', False):
+                                            # Generate GPX file
+                                            gpx_data = create_gpx(route_data)
+                                            
+                                            # Log success for testing
+                                            st.success("✅ GPX file generated successfully")
+                                            
+                                            # Sanitize filename from location
+                                            safe_location = ''.join(c if c.isalnum() else '_' for c in start_location)
+                                            
+                                            st.download_button(
+                                                label="Download GPX",
+                                                data=gpx_data,
+                                                file_name=f"{safe_location}_route.gpx",
+                                                mime="application/gpx+xml",
+                                                help="Download this route as a GPX file to use in your GPS device or other apps"
+                                            )
+                                            
+                                            with st.expander("GPX File Details"):
+                                                st.write("Your GPX file contains:")
+                                                st.write(f"- {len(route_data['coordinates'])} waypoints")
+                                                st.write(f"- Total distance: {route_data.get('distance', 0)} km")
+                                                st.write(f"- Starting coordinates: {route_data.get('start_point', (0,0))}")
+                                        else:
+                                            st.warning("GPX export requires the 'gpxpy' package.")
+                                            st.info("Install with: pip install gpxpy")
+                                    except Exception as e:
+                                        st.error(f"Error creating GPX file: {str(e)}")
+                                        st.warning("Could not generate GPX file. Make sure gpxpy is installed.")
                         except Exception as e:
                             st.error(f"Error generating route: {str(e)}")
             
@@ -297,7 +358,12 @@ def main():
                 if 'm' not in locals():
                     # Show placeholder map when no route is generated yet
                     if FOLIUM_AVAILABLE:
-                        m = folium.Map(location=[55.3960, 10.3883], zoom_start=13)
+                        # Use coordinates from route_data if available
+                        if st.session_state.current_route and 'coordinates' in st.session_state.current_route:
+                            start_coords = st.session_state.current_route.get('coordinates', [[55.3960, 10.3883]])[0]
+                            m = folium.Map(location=start_coords, zoom_start=13)
+                        else:
+                            m = folium.Map(location=[55.3960, 10.3883], zoom_start=13)
                     else:
                         m = None
                         st.error("Folium package not found. Map cannot be displayed.")
@@ -312,8 +378,138 @@ def main():
                     
         elif nav_selection == "Activity History":
             st.title("Your Activity History")
-            st.info("This section will show your past running activities recorded from the app.")
-            st.write("No activities recorded yet.")
+            
+            if not st.session_state.authenticated:
+                st.warning("Please log in to view your activity history.")
+            else:
+                # Refresh button
+                if st.button("Refresh Activities"):
+                    with st.spinner("Loading activities..."):
+                        success, activities = get_activities()
+                        if success:
+                            st.session_state.activity_history = activities
+                            st.success(f"Loaded {len(activities)} activities")
+                        else:
+                            st.error(f"Failed to load activities: {activities}")
+                
+                # Display activities
+                if not st.session_state.activity_history:
+                    # First time load
+                    with st.spinner("Loading activities..."):
+                        success, activities = get_activities()
+                        if success:
+                            st.session_state.activity_history = activities
+                        else:
+                            st.error(f"Failed to load activities: {activities}")
+                
+                if st.session_state.activity_history:
+                    # Display activities in a table
+                    st.subheader(f"You have {len(st.session_state.activity_history)} saved activities")
+                    
+                    # Create tabs for different views
+                    tab1, tab2 = st.tabs(["List View", "Map View"])
+                    
+                    with tab1:
+                        # List view with details
+                        for idx, activity in enumerate(st.session_state.activity_history):
+                            with st.container():
+                                col1, col2, col3 = st.columns([3, 1, 1])
+                                
+                                with col1:
+                                    st.subheader(activity.get('name', f"Activity {idx+1}"))
+                                    st.write(f"Date: {activity.get('createdAt', 'Unknown')}")
+                                    st.write(f"Distance: {activity.get('distance', 0)} km")
+                                    
+                                with col2:
+                                    duration_mins = activity.get('duration', 0) / 60  # Convert seconds to minutes
+                                    st.metric("Duration", f"{duration_mins:.0f} min")
+                                
+                                with col3:
+                                    # View button expands details
+                                    if st.button("View Details", key=f"view_{idx}"):
+                                        st.session_state.selected_activity = activity
+                                
+                                st.divider()
+                    
+                    with tab2:
+                        # Map view of all activities
+                        if FOLIUM_AVAILABLE:
+                            try:
+                                # Create a map centered on the first activity
+                                first_activity = st.session_state.activity_history[0]
+                                start_loc = first_activity.get('routeData', {}).get('coordinates', [[55.3960, 10.3883]])[0]
+                                
+                                m = folium.Map(location=start_loc, zoom_start=12)
+                                
+                                # Add routes to map with different colors
+                                colors = ['blue', 'red', 'green', 'purple', 'orange', 'darkred', 'darkblue', 'darkgreen']
+                                
+                                for i, activity in enumerate(st.session_state.activity_history):
+                                    if 'routeData' in activity and 'coordinates' in activity['routeData']:
+                                        coords = activity['routeData']['coordinates']
+                                        color = colors[i % len(colors)]
+                                        folium.PolyLine(
+                                            coords, 
+                                            color=color, 
+                                            weight=3, 
+                                            opacity=0.7, 
+                                            tooltip=activity.get('name', f"Activity {i+1}")
+                                        ).add_to(m)
+                                        
+                                        # Add start marker
+                                        folium.Marker(
+                                            coords[0],
+                                            tooltip=f"Start: {activity.get('name', f'Activity {i+1}')}" 
+                                        ).add_to(m)
+                                
+                                # Display the map
+                                folium_static(m)
+                                
+                            except Exception as e:
+                                st.error(f"Error displaying activity maps: {str(e)}")
+                        else:
+                            st.error("Folium package is required to display maps")
+                
+                else:
+                    st.info("No activities recorded yet. Generate and save some routes!")
+                    
+                # If a specific activity is selected, show details
+                if 'selected_activity' in st.session_state and st.session_state.selected_activity:
+                    with st.expander("Activity Details", expanded=True):
+                        activity = st.session_state.selected_activity
+                        
+                        st.subheader(activity.get('name', "Activity Details"))
+                        st.write(f"Date: {activity.get('createdAt')}")
+                        st.write(f"Distance: {activity.get('distance')} km")
+                        st.write(f"Duration: {activity.get('duration')/60:.1f} minutes")
+                        st.write(f"Start Location: {activity.get('startLocation', 'Unknown')}")
+                        
+                        # Map of single activity
+                        if FOLIUM_AVAILABLE and 'routeData' in activity and 'coordinates' in activity['routeData']:
+                            coords = activity['routeData']['coordinates']
+                            activity_map = folium.Map(location=coords[0], zoom_start=14)
+                            folium.PolyLine(coords, color='blue', weight=3, opacity=0.7).add_to(activity_map)
+                            folium.Marker(coords[0], tooltip="Start").add_to(activity_map)
+                            folium_static(activity_map)
+                        
+                        # Actions for this activity
+                        col1, col2 = st.columns(2)
+                        with col1:
+                            if st.button("Download GPX"):
+                                if 'routeData' in activity and available_packages.get('gpxpy', False):
+                                    gpx_data = create_gpx(activity['routeData'])
+                                    st.download_button(
+                                        label="Download GPX File",
+                                        data=gpx_data,
+                                        file_name=f"{activity.get('name', 'activity').replace(' ', '_')}.gpx",
+                                        mime="application/gpx+xml"
+                                    )
+                                else:
+                                    st.error("GPX creation failed. Missing route data or gpxpy package.")
+                        
+                        with col2:
+                            if st.button("Close Details"):
+                                st.session_state.selected_activity = None
             
         elif nav_selection == "Profile":
             st.title("Your Profile")
